@@ -28,6 +28,8 @@
       "type": "url",
       "url": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
       "interval": "3h",
+      // true: 用正则匹配 ip:port（with_prefix=true 时匹配 socks5://ip:port）；false: 逐行按 host:port 解析
+      "use_regex": true,
       // true 表示每行是 socks5://ip:port；false 表示每行 ip:port
       "with_prefix": false
     }
@@ -40,7 +42,7 @@
     "target": "backend",
     // 连续 dead 达到 3 次直接剔除
     "max_failures": 3,
-    "concurrency": 200
+    "concurrency": 2048
   },
 
   "pool": {

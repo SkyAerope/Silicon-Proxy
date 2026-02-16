@@ -36,8 +36,10 @@ type SourceConfig struct {
 	Path       string `json:"path"`
 	Interval   string `json:"interval"`
 	WithPrefix bool   `json:"with_prefix"`
+	UseRegex   *bool  `json:"use_regex"`
 
 	IntervalDur time.Duration `json:"-"`
+	UseRegexVal bool          `json:"-"`
 }
 
 type HealthCheckConfig struct {
@@ -147,6 +149,11 @@ func applyDefaults(cfg *Config) {
 	for index := range cfg.Sources {
 		if cfg.Sources[index].Interval == "" {
 			cfg.Sources[index].Interval = "3h"
+		}
+		if cfg.Sources[index].UseRegex == nil {
+			cfg.Sources[index].UseRegexVal = true
+		} else {
+			cfg.Sources[index].UseRegexVal = *cfg.Sources[index].UseRegex
 		}
 	}
 }

@@ -17,9 +17,18 @@ type Source interface {
 	Fetch() ([]string, error)
 }
 
-func ParseAndValidateLines(raw string, withPrefix bool) []string {
+func ParseAndValidateLines(raw string, withPrefix bool, useRegex bool) []string {
 	lines := strings.Split(raw, "\n")
 	unique := make(map[string]struct{}, len(lines))
+
+	var linePattern *regexp.Regexp
+	if useRegex {
+		if withPrefix {
+			linePattern = regexp.MustCompile(`(?i)^socks5://(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$`)
+		} else {
+			linePattern = regexp.MustCompile(`^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$`)
+		}
+	}
 
 	for _, line := range lines {
 		candidate := strings.TrimSpace(line)
@@ -27,11 +36,18 @@ func ParseAndValidateLines(raw string, withPrefix bool) []string {
 			continue
 		}
 
-		if withPrefix {
-			if !strings.HasPrefix(strings.ToLower(candidate), "socks5://") {
+		if useRegex {
+			matches := linePattern.FindStringSubmatch(candidate)
+			if len(matches) != 3 {
 				continue
 			}
-			candidate = strings.TrimPrefix(strings.TrimPrefix(candidate, "socks5://"), "SOCKS5://")
+			candidate = matches[1] + ":" + matches[2]
+		} else if withPrefix {
+			lower := strings.ToLower(candidate)
+			if !strings.HasPrefix(lower, "socks5://") {
+				continue
+			}
+			candidate = strings.TrimSpace(candidate[len("socks5://"):])
 		}
 
 		candidate = strings.TrimSpace(candidate)

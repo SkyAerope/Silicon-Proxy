@@ -12,15 +12,17 @@ type URLSource struct {
 	url        string
 	interval   time.Duration
 	withPrefix bool
+	useRegex   bool
 	client     *http.Client
 }
 
-func NewURLSource(url string, interval time.Duration, withPrefix bool) *URLSource {
+func NewURLSource(url string, interval time.Duration, withPrefix bool, useRegex bool) *URLSource {
 	return &URLSource{
 		id:         buildSourceID("url", url),
 		url:        url,
 		interval:   interval,
 		withPrefix: withPrefix,
+		useRegex:   useRegex,
 		client: &http.Client{
 			Timeout: 20 * time.Second,
 		},
@@ -51,5 +53,5 @@ func (source *URLSource) Fetch() ([]string, error) {
 		return nil, fmt.Errorf("read url source body: %w", err)
 	}
 
-	return ParseAndValidateLines(string(body), source.withPrefix), nil
+	return ParseAndValidateLines(string(body), source.withPrefix, source.useRegex), nil
 }

@@ -34,9 +34,9 @@ func NewManager(cfg *config.Config, store SourceStore, logger *slog.Logger, afte
 	for _, sourceConfig := range cfg.Sources {
 		switch sourceConfig.Type {
 		case "url":
-			sources = append(sources, NewURLSource(sourceConfig.URL, sourceConfig.IntervalDur, sourceConfig.WithPrefix))
+			sources = append(sources, NewURLSource(sourceConfig.URL, sourceConfig.IntervalDur, sourceConfig.WithPrefix, sourceConfig.UseRegexVal))
 		case "local":
-			sources = append(sources, NewLocalSource(sourceConfig.Path, sourceConfig.IntervalDur, sourceConfig.WithPrefix))
+			sources = append(sources, NewLocalSource(sourceConfig.Path, sourceConfig.IntervalDur, sourceConfig.WithPrefix, sourceConfig.UseRegexVal))
 		default:
 			return nil, errors.New("unsupported source type")
 		}
