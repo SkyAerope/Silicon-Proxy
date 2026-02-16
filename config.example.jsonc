@@ -11,9 +11,6 @@
   // 单次请求最多尝试几个代理（失败自动切换下一个可用代理）
   "max_request_retries": 3,
 
-  // 存活代理数超过该值时，不再从 sources 拉取新代理；0 表示一直拉取
-  "max_live_proxies": 0,
-
   // 带 key 的转发请求总超时（包含重试），默认 10s
   "request_timeout": "10s",
 
@@ -28,6 +25,11 @@
       "type": "url",
       "url": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
       "interval": "3h",
+      // max_live_proxies:
+      //   -1: 仅在出现 no available proxy for auth 时触发拉取（不会按 interval 定时拉取；但仍受 interval 冷却限制）
+      //    0: 按 interval 一直拉取
+      //   >0: 按 interval 拉取，但当存活代理数 >= max_live_proxies 时跳过
+      "max_live_proxies": 0,
       // true: 用正则匹配 ip:port（with_prefix=true 时匹配 socks5://ip:port）；false: 逐行按 host:port 解析
       "use_regex": true,
       // true 表示每行是 socks5://ip:port；false 表示每行 ip:port

@@ -17,12 +17,18 @@ type SourceStore interface {
 	CountAliveProxies(ctx context.Context) (int, error)
 }
 
-type Manager struct {
-	store          SourceStore
-	sources        []Source
-	logger         *slog.Logger
-	afterFetch     func(context.Context)
+type managedSource struct {
+	source         Source
 	maxLiveProxies int
+}
+
+type Manager struct {
+	store      SourceStore
+	scheduled  []managedSource
+	onDemand   []managedSource
+	logger     *slog.Logger
+	afterFetch func(context.Context)
+	onDemandCh chan struct{}
 }
 
 func NewManager(cfg *config.Config, store SourceStore, logger *slog.Logger, afterFetch func(context.Context)) (*Manager, error) {
@@ -30,44 +36,67 @@ func NewManager(cfg *config.Config, store SourceStore, logger *slog.Logger, afte
 		return nil, errors.New("source store is nil")
 	}
 
-	sources := make([]Source, 0, len(cfg.Sources))
+	scheduled := make([]managedSource, 0, len(cfg.Sources))
+	onDemand := make([]managedSource, 0, len(cfg.Sources))
 	for _, sourceConfig := range cfg.Sources {
+		maxLive := sourceConfig.MaxLiveProxies
+
+		var built Source
 		switch sourceConfig.Type {
 		case "url":
-			sources = append(sources, NewURLSource(sourceConfig.URL, sourceConfig.IntervalDur, sourceConfig.WithPrefix, sourceConfig.UseRegexVal))
+			built = NewURLSource(sourceConfig.URL, sourceConfig.IntervalDur, sourceConfig.WithPrefix, sourceConfig.UseRegexVal)
 		case "local":
-			sources = append(sources, NewLocalSource(sourceConfig.Path, sourceConfig.IntervalDur, sourceConfig.WithPrefix, sourceConfig.UseRegexVal))
+			built = NewLocalSource(sourceConfig.Path, sourceConfig.IntervalDur, sourceConfig.WithPrefix, sourceConfig.UseRegexVal)
 		default:
 			return nil, errors.New("unsupported source type")
+		}
+
+		item := managedSource{source: built, maxLiveProxies: maxLive}
+		if maxLive == -1 {
+			onDemand = append(onDemand, item)
+		} else {
+			scheduled = append(scheduled, item)
 		}
 	}
 
 	return &Manager{
-		store:          store,
-		sources:        sources,
-		logger:         logger,
-		afterFetch:     afterFetch,
-		maxLiveProxies: cfg.MaxLiveProxies,
+		store:      store,
+		scheduled:  scheduled,
+		onDemand:   onDemand,
+		logger:     logger,
+		afterFetch: afterFetch,
+		onDemandCh: make(chan struct{}, 1),
 	}, nil
 }
 
+func (manager *Manager) NotifyNoAvailableProxy() {
+	select {
+	case manager.onDemandCh <- struct{}{}:
+	default:
+	}
+}
+
 func (manager *Manager) Run(ctx context.Context) {
-	for _, source := range manager.sources {
-		current := source
+	for _, item := range manager.scheduled {
+		current := item
 		go manager.runSingleSource(ctx, current)
+	}
+
+	if len(manager.onDemand) > 0 {
+		go manager.runOnDemand(ctx)
 	}
 }
 
 func (manager *Manager) FetchDueNow(ctx context.Context) {
-	for _, current := range manager.sources {
+	for _, current := range manager.scheduled {
 		manager.fetchIfDue(ctx, current)
 	}
 }
 
-func (manager *Manager) runSingleSource(ctx context.Context, source Source) {
-	manager.fetchIfDue(ctx, source)
+func (manager *Manager) runSingleSource(ctx context.Context, item managedSource) {
+	manager.fetchIfDue(ctx, item)
 
-	ticker := time.NewTicker(source.Interval())
+	ticker := time.NewTicker(item.source.Interval())
 	defer ticker.Stop()
 
 	for {
@@ -75,12 +104,43 @@ func (manager *Manager) runSingleSource(ctx context.Context, source Source) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			manager.fetchIfDue(ctx, source)
+			manager.fetchIfDue(ctx, item)
 		}
 	}
 }
 
-func (manager *Manager) fetchIfDue(ctx context.Context, source Source) {
+func (manager *Manager) runOnDemand(ctx context.Context) {
+	debounce := time.NewTimer(0)
+	if !debounce.Stop() {
+		select {
+		case <-debounce.C:
+		default:
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-manager.onDemandCh:
+			// debounce bursts of "no available" signals
+			if !debounce.Stop() {
+				select {
+				case <-debounce.C:
+				default:
+				}
+			}
+			debounce.Reset(500 * time.Millisecond)
+		case <-debounce.C:
+			for _, item := range manager.onDemand {
+				manager.fetchIfDue(ctx, item)
+			}
+		}
+	}
+}
+
+func (manager *Manager) fetchIfDue(ctx context.Context, item managedSource) {
+	source := item.source
 	lastFetch, err := manager.store.GetSourceLastFetch(ctx, source.ID())
 	if err != nil {
 		manager.logger.Warn("read source last fetch failed", "source", source.ID(), "error", err)
@@ -90,14 +150,19 @@ func (manager *Manager) fetchIfDue(ctx context.Context, source Source) {
 		return
 	}
 
-	if manager.maxLiveProxies > 0 {
+	if item.maxLiveProxies > 0 {
 		aliveCount, err := manager.store.CountAliveProxies(ctx)
 		if err != nil {
 			manager.logger.Warn("count alive proxies failed", "error", err)
-		} else if aliveCount >= manager.maxLiveProxies {
-			manager.logger.Info("skip source fetch due to max_live_proxies", "source", source.ID(), "alive", aliveCount, "max_live_proxies", manager.maxLiveProxies)
+		} else if aliveCount >= item.maxLiveProxies {
+			manager.logger.Info("skip source fetch due to max_live_proxies", "source", source.ID(), "alive", aliveCount, "max_live_proxies", item.maxLiveProxies)
 			return
 		}
+	}
+
+	attemptedAt := time.Now()
+	if err := manager.store.SetSourceLastFetch(ctx, source.ID(), attemptedAt); err != nil {
+		manager.logger.Warn("store source last fetch failed", "source", source.ID(), "error", err)
 	}
 
 	proxies, err := source.Fetch()
@@ -120,19 +185,19 @@ func (manager *Manager) fetchIfDue(ctx context.Context, source Source) {
 		manager.afterFetch(ctx)
 	}
 
-	if err := manager.store.SetSourceLastFetch(ctx, source.ID(), time.Now()); err != nil {
-		manager.logger.Warn("store source last fetch failed", "source", source.ID(), "error", err)
-	}
-
 	manager.logger.Info("source fetched", "source", source.ID(), "proxy_count", len(proxies))
 }
 
 func (manager *Manager) FetchAllForce(ctx context.Context) {
 	var waitGroup sync.WaitGroup
 
-	for _, source := range manager.sources {
+	all := make([]managedSource, 0, len(manager.scheduled)+len(manager.onDemand))
+	all = append(all, manager.scheduled...)
+	all = append(all, manager.onDemand...)
+
+	for _, item := range all {
 		waitGroup.Add(1)
-		current := source
+		current := item.source
 		go func() {
 			defer waitGroup.Done()
 

@@ -14,7 +14,6 @@ type Config struct {
 	Backend           string            `json:"backend"`
 	MaxAuthPerProxy   int               `json:"max_auth_per_proxy"`
 	MaxRequestRetries int               `json:"max_request_retries"`
-	MaxLiveProxies    int               `json:"max_live_proxies"`
 	RequestTimeout    string            `json:"request_timeout"`
 	Redis             RedisConfig       `json:"redis"`
 	Sources           []SourceConfig    `json:"sources"`
@@ -31,12 +30,13 @@ type RedisConfig struct {
 }
 
 type SourceConfig struct {
-	Type       string `json:"type"`
-	URL        string `json:"url"`
-	Path       string `json:"path"`
-	Interval   string `json:"interval"`
-	WithPrefix bool   `json:"with_prefix"`
-	UseRegex   *bool  `json:"use_regex"`
+	Type           string `json:"type"`
+	URL            string `json:"url"`
+	Path           string `json:"path"`
+	Interval       string `json:"interval"`
+	WithPrefix     bool   `json:"with_prefix"`
+	UseRegex       *bool  `json:"use_regex"`
+	MaxLiveProxies int    `json:"max_live_proxies"`
 
 	IntervalDur time.Duration `json:"-"`
 	UseRegexVal bool          `json:"-"`
@@ -98,9 +98,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.MaxRequestRetries <= 0 {
 		cfg.MaxRequestRetries = 3
 	}
-	if cfg.MaxLiveProxies < 0 {
-		cfg.MaxLiveProxies = 0
-	}
 	if cfg.RequestTimeout == "" {
 		cfg.RequestTimeout = "10s"
 	}
@@ -149,6 +146,13 @@ func applyDefaults(cfg *Config) {
 	for index := range cfg.Sources {
 		if cfg.Sources[index].Interval == "" {
 			cfg.Sources[index].Interval = "3h"
+		}
+		// max_live_proxies:
+		//   -1: only fetch when explicitly triggered (no available proxy)
+		//    0: always fetch by interval
+		//   >0: fetch by interval, but skip when alive proxies >= max_live_proxies
+		if cfg.Sources[index].MaxLiveProxies < -1 {
+			cfg.Sources[index].MaxLiveProxies = -1
 		}
 		if cfg.Sources[index].UseRegex == nil {
 			cfg.Sources[index].UseRegexVal = true

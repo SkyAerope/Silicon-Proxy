@@ -30,6 +30,8 @@ type AuthRouter struct {
 	cache           sync.Map
 }
 
+var ErrNoAvailableProxyForAuth = errors.New("no available proxy for auth")
+
 func NewAuthRouter(store RoutingStore, transportPool *TransportPool, maxAuthPerProxy, maxFailures int) *AuthRouter {
 	return &AuthRouter{
 		store:           store,
@@ -99,7 +101,7 @@ func (router *AuthRouter) Resolve(ctx context.Context, authValue string) (*http.
 		return transport, proxyStat.Addr, authHash, nil
 	}
 
-	return nil, "", authHash, errors.New("no available proxy for auth")
+	return nil, "", authHash, ErrNoAvailableProxyForAuth
 }
 
 func (router *AuthRouter) HandleProxyFailure(ctx context.Context, proxyAddr string) error {
