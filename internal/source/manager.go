@@ -14,13 +14,15 @@ type SourceStore interface {
 	AddProxies(ctx context.Context, proxies []string) error
 	GetSourceLastFetch(ctx context.Context, sourceID string) (time.Time, error)
 	SetSourceLastFetch(ctx context.Context, sourceID string, value time.Time) error
+	CountAliveProxies(ctx context.Context) (int, error)
 }
 
 type Manager struct {
-	store      SourceStore
-	sources    []Source
-	logger     *slog.Logger
-	afterFetch func(context.Context)
+	store          SourceStore
+	sources        []Source
+	logger         *slog.Logger
+	afterFetch     func(context.Context)
+	maxLiveProxies int
 }
 
 func NewManager(cfg *config.Config, store SourceStore, logger *slog.Logger, afterFetch func(context.Context)) (*Manager, error) {
@@ -41,10 +43,11 @@ func NewManager(cfg *config.Config, store SourceStore, logger *slog.Logger, afte
 	}
 
 	return &Manager{
-		store:      store,
-		sources:    sources,
-		logger:     logger,
-		afterFetch: afterFetch,
+		store:          store,
+		sources:        sources,
+		logger:         logger,
+		afterFetch:     afterFetch,
+		maxLiveProxies: cfg.MaxLiveProxies,
 	}, nil
 }
 
@@ -85,6 +88,16 @@ func (manager *Manager) fetchIfDue(ctx context.Context, source Source) {
 
 	if !lastFetch.IsZero() && time.Since(lastFetch) < source.Interval() {
 		return
+	}
+
+	if manager.maxLiveProxies > 0 {
+		aliveCount, err := manager.store.CountAliveProxies(ctx)
+		if err != nil {
+			manager.logger.Warn("count alive proxies failed", "error", err)
+		} else if aliveCount >= manager.maxLiveProxies {
+			manager.logger.Info("skip source fetch due to max_live_proxies", "source", source.ID(), "alive", aliveCount, "max_live_proxies", manager.maxLiveProxies)
+			return
+		}
 	}
 
 	proxies, err := source.Fetch()

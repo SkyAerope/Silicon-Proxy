@@ -102,6 +102,39 @@ func (store *RedisStore) GetProxies(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+func (store *RedisStore) CountAliveProxies(ctx context.Context) (int, error) {
+	proxies, err := store.GetProxies(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(proxies) == 0 {
+		return 0, nil
+	}
+
+	pipe := store.client.Pipeline()
+	commands := make([]*redis.StringCmd, 0, len(proxies))
+	for _, proxyAddr := range proxies {
+		commands = append(commands, pipe.HGet(ctx, proxyMetaKey(proxyAddr), "alive"))
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return 0, fmt.Errorf("count alive proxies failed: %w", err)
+	}
+
+	aliveCount := 0
+	for _, command := range commands {
+		if command.Err() != nil {
+			continue
+		}
+		if command.Val() == "1" {
+			aliveCount++
+		}
+	}
+
+	return aliveCount, nil
+}
+
 func (store *RedisStore) SetSourceLastFetch(ctx context.Context, sourceID string, value time.Time) error {
 	key := sourceLastFetchKey(sourceID)
 	return store.client.Set(ctx, key, value.Unix(), 0).Err()
@@ -220,6 +253,31 @@ redis.call("HINCRBY", proxy_meta_key, "bound_count", 1)
 return 1
 `)
 
+var unassignScript = redis.NewScript(`
+local auth_key = KEYS[1]
+local proxy_meta_key = KEYS[2]
+local proxy_auths_key = KEYS[3]
+local auth_hash = ARGV[1]
+local proxy_addr = ARGV[2]
+
+local current = redis.call("GET", auth_key)
+if current ~= proxy_addr then
+	return 0
+end
+
+redis.call("DEL", auth_key)
+redis.call("SREM", proxy_auths_key, auth_hash)
+
+local bound = tonumber(redis.call("HGET", proxy_meta_key, "bound_count") or "0")
+if bound > 0 then
+	redis.call("HINCRBY", proxy_meta_key, "bound_count", -1)
+else
+	redis.call("HSET", proxy_meta_key, "bound_count", 0)
+end
+
+return 1
+`)
+
 func (store *RedisStore) TryAssignAuthHashToProxy(ctx context.Context, authHash, proxyAddr string, maxBound int) (bool, error) {
 	result, err := assignScript.Run(ctx, store.client, []string{
 		authKey(authHash),
@@ -234,6 +292,18 @@ func (store *RedisStore) TryAssignAuthHashToProxy(ctx context.Context, authHash,
 		return true, nil
 	}
 
+	return result == 1, nil
+}
+
+func (store *RedisStore) UnassignAuthHashFromProxyIfMatch(ctx context.Context, authHash, proxyAddr string) (bool, error) {
+	result, err := unassignScript.Run(ctx, store.client, []string{
+		authKey(authHash),
+		proxyMetaKey(proxyAddr),
+		proxyAuthSetKey(proxyAddr),
+	}, authHash, proxyAddr).Int()
+	if err != nil {
+		return false, fmt.Errorf("run unassign script failed: %w", err)
+	}
 	return result == 1, nil
 }
 

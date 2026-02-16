@@ -92,6 +92,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			lastProxy = proxyAddr
 			lastError = roundTripErr
 			_ = handler.router.HandleProxyFailure(requestContext, proxyAddr)
+			handler.router.UnbindAuthHash(requestContext, authHash, proxyAddr)
 			handler.logger.Warn(
 				"proxy transport error",
 				"proxy", proxyAddr,

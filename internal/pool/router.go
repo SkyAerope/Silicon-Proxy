@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/silicon-proxy/Silicon-Proxy/internal/store"
 )
@@ -16,6 +17,7 @@ type RoutingStore interface {
 	IsProxyAlive(ctx context.Context, proxyAddr string) (bool, error)
 	GetAliveProxiesByLoad(ctx context.Context) ([]store.ProxyStat, error)
 	TryAssignAuthHashToProxy(ctx context.Context, authHash, proxyAddr string, maxBound int) (bool, error)
+	UnassignAuthHashFromProxyIfMatch(ctx context.Context, authHash, proxyAddr string) (bool, error)
 	IncrementProxyFailure(ctx context.Context, proxyAddr string) (int, error)
 	RemoveProxyCascade(ctx context.Context, proxyAddr string) error
 }
@@ -65,6 +67,8 @@ func (router *AuthRouter) Resolve(ctx context.Context, authValue string) (*http.
 				router.cache.Store(authHash, assigned)
 				return transport, assigned, authHash, nil
 			}
+		} else {
+			_, _ = router.unbindAuthHash(ctx, authHash, assigned)
 		}
 	}
 
@@ -99,7 +103,10 @@ func (router *AuthRouter) Resolve(ctx context.Context, authValue string) (*http.
 }
 
 func (router *AuthRouter) HandleProxyFailure(ctx context.Context, proxyAddr string) error {
-	failures, err := router.store.IncrementProxyFailure(ctx, proxyAddr)
+	writeContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	failures, err := router.store.IncrementProxyFailure(writeContext, proxyAddr)
 	if err != nil {
 		return err
 	}
@@ -108,12 +115,30 @@ func (router *AuthRouter) HandleProxyFailure(ctx context.Context, proxyAddr stri
 		return nil
 	}
 
-	if err := router.store.RemoveProxyCascade(ctx, proxyAddr); err != nil {
+	if err := router.store.RemoveProxyCascade(writeContext, proxyAddr); err != nil {
 		return err
 	}
 
 	router.evictProxyFromCache(proxyAddr)
 	return nil
+}
+
+func (router *AuthRouter) UnbindAuthHash(ctx context.Context, authHash string, proxyAddr string) {
+	_, _ = router.unbindAuthHash(ctx, authHash, proxyAddr)
+}
+
+func (router *AuthRouter) unbindAuthHash(ctx context.Context, authHash string, proxyAddr string) (bool, error) {
+	writeContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	unassigned, err := router.store.UnassignAuthHashFromProxyIfMatch(writeContext, authHash, proxyAddr)
+	if err != nil {
+		return false, err
+	}
+	if unassigned {
+		router.cache.Delete(authHash)
+	}
+	return unassigned, nil
 }
 
 func (router *AuthRouter) evictProxyFromCache(proxyAddr string) {

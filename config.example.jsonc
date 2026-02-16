@@ -11,8 +11,11 @@
   // 单次请求最多尝试几个代理（失败自动切换下一个可用代理）
   "max_request_retries": 3,
 
-  // 带 key 的转发请求总超时（包含重试），默认 20s
-  "request_timeout": "20s",
+  // 存活代理数超过该值时，不再从 sources 拉取新代理；0 表示一直拉取
+  "max_live_proxies": 0,
+
+  // 带 key 的转发请求总超时（包含重试），默认 10s
+  "request_timeout": "10s",
 
   "redis": {
     "addr": "redis:6379",
@@ -37,7 +40,7 @@
     "target": "backend",
     // 连续 dead 达到 3 次直接剔除
     "max_failures": 3,
-    "concurrency": 50
+    "concurrency": 200
   },
 
   "pool": {

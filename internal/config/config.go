@@ -14,6 +14,7 @@ type Config struct {
 	Backend           string            `json:"backend"`
 	MaxAuthPerProxy   int               `json:"max_auth_per_proxy"`
 	MaxRequestRetries int               `json:"max_request_retries"`
+	MaxLiveProxies    int               `json:"max_live_proxies"`
 	RequestTimeout    string            `json:"request_timeout"`
 	Redis             RedisConfig       `json:"redis"`
 	Sources           []SourceConfig    `json:"sources"`
@@ -94,6 +95,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.MaxRequestRetries <= 0 {
 		cfg.MaxRequestRetries = 3
+	}
+	if cfg.MaxLiveProxies < 0 {
+		cfg.MaxLiveProxies = 0
 	}
 	if cfg.RequestTimeout == "" {
 		cfg.RequestTimeout = "10s"

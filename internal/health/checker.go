@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -25,6 +26,7 @@ type Checker struct {
 	target      string
 	maxFailures int
 	concurrency int
+	running     atomic.Bool
 }
 
 func NewChecker(store HealthStore, logger *slog.Logger, interval, timeout time.Duration, target string, maxFailures, concurrency int) *Checker {
@@ -56,6 +58,11 @@ func (checker *Checker) Run(ctx context.Context) {
 }
 
 func (checker *Checker) RunOnce(ctx context.Context) {
+	if !checker.running.CompareAndSwap(false, true) {
+		return
+	}
+	defer checker.running.Store(false)
+
 	proxies, err := checker.store.GetProxies(ctx)
 	if err != nil {
 		checker.logger.Warn("health: load proxies failed", "error", err)
