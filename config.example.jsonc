@@ -1,0 +1,48 @@
+{
+  // 服务监听地址
+  "listen": ":8080",
+
+  // 默认后端地址（按你的要求）
+  "backend": "https://api.siliconflow.cn/",
+
+  // 每个代理最多绑定 auth key 数量（建议 1-5）
+  "max_auth_per_proxy": 1,
+
+  // 单次请求最多尝试几个代理（失败自动切换下一个可用代理）
+  "max_request_retries": 3,
+
+  // 带 key 的转发请求总超时（包含重试），默认 20s
+  "request_timeout": "20s",
+
+  "redis": {
+    "addr": "redis:6379",
+    "password": "",
+    "db": 0
+  },
+
+  "sources": [
+    {
+      "type": "url",
+      "url": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt",
+      "interval": "3h",
+      // true 表示每行是 socks5://ip:port；false 表示每行 ip:port
+      "with_prefix": false
+    }
+  ],
+
+  "health_check": {
+    "interval": "60s",
+    "timeout": "5s",
+    // 探活目标：backend 表示直接探测后端（例如 api.siliconflow.cn:443）；也可以写成 host:port
+    "target": "backend",
+    // 连续 dead 达到 3 次直接剔除
+    "max_failures": 3,
+    "concurrency": 50
+  },
+
+  "pool": {
+    "max_idle_conns": 200,
+    "max_idle_conns_per_host": 100,
+    "idle_timeout": "90s"
+  }
+}
