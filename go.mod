@@ -3,8 +3,8 @@ module github.com/silicon-proxy/Silicon-Proxy
 go 1.23.0
 
 require (
-	github.com/redis/go-redis/v9 v9.6.1
-	golang.org/x/net v0.36.0
+	github.com/redis/go-redis/v9 v9.6.3
+	golang.org/x/net v0.38.0
 )
 
 require (
