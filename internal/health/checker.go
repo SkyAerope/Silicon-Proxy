@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
 	"net"
 	"sync"
@@ -145,6 +146,23 @@ func (checker *Checker) tryDialThroughProxy(proxyAddr string) bool {
 	if err != nil {
 		return false
 	}
-	_ = conn.Close()
+	defer conn.Close()
+
+	host, port, err := net.SplitHostPort(checker.target)
+	if err != nil {
+		return false
+	}
+
+	if port != "443" {
+		return true
+	}
+
+	_ = conn.SetDeadline(time.Now().Add(checker.timeout))
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: host})
+	if err := tlsConn.Handshake(); err != nil {
+		_ = tlsConn.Close()
+		return false
+	}
+	_ = tlsConn.Close()
 	return true
 }
