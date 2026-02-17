@@ -6,9 +6,7 @@ services:
       - redis-data:/data
 
   silicon-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/skyaerope/silicon-proxy:latest
     restart: unless-stopped
     depends_on:
       - redis

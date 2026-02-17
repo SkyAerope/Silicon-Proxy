@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/silicon-proxy/Silicon-Proxy/internal/store"
+	"github.com/SkyAerope/Silicon-Proxy/internal/store"
 )
 
 type RoutingStore interface {

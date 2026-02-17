@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/silicon-proxy/Silicon-Proxy/internal/config"
+	"github.com/SkyAerope/Silicon-Proxy/internal/config"
 )
 
 type SourceStore interface {

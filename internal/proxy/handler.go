@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/silicon-proxy/Silicon-Proxy/internal/pool"
+	"github.com/SkyAerope/Silicon-Proxy/internal/pool"
 )
 
 type Handler struct {

@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/silicon-proxy/Silicon-Proxy/internal/config"
-	"github.com/silicon-proxy/Silicon-Proxy/internal/health"
-	"github.com/silicon-proxy/Silicon-Proxy/internal/pool"
-	"github.com/silicon-proxy/Silicon-Proxy/internal/proxy"
-	"github.com/silicon-proxy/Silicon-Proxy/internal/source"
-	"github.com/silicon-proxy/Silicon-Proxy/internal/store"
+	"github.com/SkyAerope/Silicon-Proxy/internal/config"
+	"github.com/SkyAerope/Silicon-Proxy/internal/health"
+	"github.com/SkyAerope/Silicon-Proxy/internal/pool"
+	"github.com/SkyAerope/Silicon-Proxy/internal/proxy"
+	"github.com/SkyAerope/Silicon-Proxy/internal/source"
+	"github.com/SkyAerope/Silicon-Proxy/internal/store"
 )
 
 func main() {
