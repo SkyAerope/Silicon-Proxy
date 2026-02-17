@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -47,9 +48,7 @@ func NewHandler(router *pool.AuthRouter, backendURL string, maxRetries int, requ
 
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	startTime := time.Now()
-	requestContext, cancel := context.WithTimeout(request.Context(), handler.requestTimeout)
-	defer cancel()
-	request = request.WithContext(requestContext)
+	baseContext := request.Context()
 
 	authValue := strings.TrimSpace(request.Header.Get("Authorization"))
 	if authValue == "" {
@@ -69,11 +68,19 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	var authHash string
 
 	for attempt := 1; attempt <= handler.maxRetries; attempt++ {
-		transport, proxyAddr, resolvedAuthHash, resolveErr := handler.router.Resolve(requestContext, authValue)
+		remainingConnectBudget := handler.requestTimeout - time.Since(startTime)
+		if remainingConnectBudget <= 0 {
+			http.Error(writer, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout)
+			return
+		}
+
+		resolveContext, resolveCancel := context.WithTimeout(baseContext, remainingConnectBudget)
+		transport, proxyAddr, resolvedAuthHash, resolveErr := handler.router.Resolve(resolveContext, authValue)
+		resolveCancel()
 		authHash = resolvedAuthHash
 		if resolveErr != nil {
 			statusCode := http.StatusServiceUnavailable
-			if errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+			if errors.Is(resolveErr, context.DeadlineExceeded) || errors.Is(baseContext.Err(), context.DeadlineExceeded) {
 				statusCode = http.StatusGatewayTimeout
 			}
 			http.Error(writer, http.StatusText(statusCode), statusCode)
@@ -81,7 +88,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 
-		upstreamRequest, requestErr := handler.buildUpstreamRequest(request, bodyBytes)
+		upstreamRequest, requestErr := handler.buildUpstreamRequest(baseContext, request, bodyBytes, remainingConnectBudget)
 		if requestErr != nil {
 			http.Error(writer, "build upstream request failed", http.StatusBadGateway)
 			return
@@ -91,8 +98,8 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		if roundTripErr != nil {
 			lastProxy = proxyAddr
 			lastError = roundTripErr
-			_ = handler.router.HandleProxyFailure(requestContext, proxyAddr)
-			handler.router.UnbindAuthHash(requestContext, authHash, proxyAddr)
+			_ = handler.router.HandleProxyFailure(baseContext, proxyAddr)
+			handler.router.UnbindAuthHash(baseContext, authHash, proxyAddr)
 			handler.logger.Warn(
 				"proxy transport error",
 				"proxy", proxyAddr,
@@ -100,7 +107,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 				"attempt", attempt,
 				"error", roundTripErr,
 			)
-			if errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+			if isTimeoutError(roundTripErr) {
 				http.Error(writer, http.StatusText(http.StatusGatewayTimeout), http.StatusGatewayTimeout)
 				return
 			}
@@ -122,7 +129,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 
 	statusCode := http.StatusBadGateway
-	if errors.Is(requestContext.Err(), context.DeadlineExceeded) {
+	if errors.Is(baseContext.Err(), context.DeadlineExceeded) {
 		statusCode = http.StatusGatewayTimeout
 	}
 	http.Error(writer, http.StatusText(statusCode), statusCode)
@@ -136,14 +143,15 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	)
 }
 
-func (handler *Handler) buildUpstreamRequest(request *http.Request, bodyBytes []byte) (*http.Request, error) {
+func (handler *Handler) buildUpstreamRequest(baseContext context.Context, request *http.Request, bodyBytes []byte, connectBudget time.Duration) (*http.Request, error) {
 	targetURL := handler.backend.ResolveReference(&url.URL{
 		Path:     request.URL.Path,
 		RawPath:  request.URL.RawPath,
 		RawQuery: request.URL.RawQuery,
 	})
 
-	upstreamRequest, err := http.NewRequestWithContext(request.Context(), request.Method, targetURL.String(), bytes.NewReader(bodyBytes))
+	ctx := pool.WithConnectTimeout(baseContext, connectBudget)
+	upstreamRequest, err := http.NewRequestWithContext(ctx, request.Method, targetURL.String(), bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -174,4 +182,18 @@ func shortHash(value string) string {
 		return value[:8]
 	}
 	return value
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
 }

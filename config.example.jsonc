@@ -2,7 +2,7 @@
   // 服务监听地址
   "listen": ":8080",
 
-  // 默认后端地址（按你的要求）
+  // 反代后端地址
   "backend": "https://api.siliconflow.cn/",
 
   // 每个代理最多绑定 auth key 数量（建议 1-5）
@@ -11,7 +11,8 @@
   // 单次请求最多尝试几个代理（失败自动切换下一个可用代理）
   "max_request_retries": 3,
 
-  // 带 key 的转发请求总超时（包含重试），默认 10s
+  // 带 key 的转发请求“连接预算”（包含选路 + 通过代理建立到后端的连接/TLS 握手，包含重试消耗），默认 10s
+  // 一旦连上后端并开始返回内容（尤其是 SSE/流式），不会再因为这个超时而被中断；只会随客户端断开而结束。
   "request_timeout": "10s",
 
   "redis": {
@@ -40,10 +41,12 @@
   "health_check": {
     "interval": "60s",
     "timeout": "5s",
-    // 探活目标：backend 表示直接探测后端（例如 api.siliconflow.cn:443）；也可以写成 host:port
+    // 探活目标：backend 表示直接探测反代后端；也可以写成 host:port
     "target": "backend",
     // 连续 dead 达到 3 次直接剔除
     "max_failures": 3,
+    // 被剔除（Remove）后的代理会进入冷却期，避免马上被重新抓取/加入；到期后允许再次加入
+    "dead_proxy_ttl": "24h",
     "concurrency": 2048
   },
 

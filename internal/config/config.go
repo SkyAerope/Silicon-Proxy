@@ -43,14 +43,16 @@ type SourceConfig struct {
 }
 
 type HealthCheckConfig struct {
-	Interval    string `json:"interval"`
-	Timeout     string `json:"timeout"`
-	Target      string `json:"target"`
-	MaxFailures int    `json:"max_failures"`
-	Concurrency int    `json:"concurrency"`
+	Interval     string `json:"interval"`
+	Timeout      string `json:"timeout"`
+	Target       string `json:"target"`
+	MaxFailures  int    `json:"max_failures"`
+	Concurrency  int    `json:"concurrency"`
+	DeadProxyTTL string `json:"dead_proxy_ttl"`
 
-	IntervalDur time.Duration `json:"-"`
-	TimeoutDur  time.Duration `json:"-"`
+	IntervalDur     time.Duration `json:"-"`
+	TimeoutDur      time.Duration `json:"-"`
+	DeadProxyTTLDur time.Duration `json:"-"`
 }
 
 type PoolConfig struct {
@@ -132,6 +134,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.HealthCheck.Concurrency <= 0 {
 		cfg.HealthCheck.Concurrency = 50
 	}
+	if strings.TrimSpace(cfg.HealthCheck.DeadProxyTTL) == "" {
+		cfg.HealthCheck.DeadProxyTTL = "24h"
+	}
 
 	if cfg.Pool.MaxIdleConns <= 0 {
 		cfg.Pool.MaxIdleConns = 200
@@ -195,6 +200,10 @@ func validateAndParseDurations(cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("health_check.timeout parse error: %w", err)
 	}
+	deadProxyTTLDur, err := time.ParseDuration(cfg.HealthCheck.DeadProxyTTL)
+	if err != nil {
+		return fmt.Errorf("health_check.dead_proxy_ttl parse error: %w", err)
+	}
 	idleDur, err := time.ParseDuration(cfg.Pool.IdleTimeout)
 	if err != nil {
 		return fmt.Errorf("pool.idle_timeout parse error: %w", err)
@@ -204,12 +213,13 @@ func validateAndParseDurations(cfg *Config) error {
 		return fmt.Errorf("request_timeout parse error: %w", err)
 	}
 
-	if intervalDur <= 0 || timeoutDur <= 0 || idleDur <= 0 || requestTimeoutDur <= 0 {
+	if intervalDur <= 0 || timeoutDur <= 0 || deadProxyTTLDur <= 0 || idleDur <= 0 || requestTimeoutDur <= 0 {
 		return errors.New("health/pool durations must be greater than 0")
 	}
 
 	cfg.HealthCheck.IntervalDur = intervalDur
 	cfg.HealthCheck.TimeoutDur = timeoutDur
+	cfg.HealthCheck.DeadProxyTTLDur = deadProxyTTLDur
 	cfg.Pool.IdleTimeoutDur = idleDur
 	cfg.RequestTimeoutDur = requestTimeoutDur
 

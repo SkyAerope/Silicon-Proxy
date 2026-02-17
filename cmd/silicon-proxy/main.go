@@ -33,12 +33,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	redisStore, err := store.NewRedisStore(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	redisStore, err := store.NewRedisStore(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB, cfg.HealthCheck.DeadProxyTTLDur)
 	if err != nil {
 		logger.Error("init redis failed", "error", err)
 		os.Exit(1)
 	}
 	defer redisStore.Close()
+
+	if err := redisStore.MigrateLegacyDeadSetToTTL(context.Background()); err != nil {
+		logger.Warn("migrate legacy dead proxies failed", "error", err)
+	}
 
 	mainContext, cancelMain := context.WithCancel(context.Background())
 	defer cancelMain()

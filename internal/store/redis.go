@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,6 +16,7 @@ import (
 const (
 	proxiesKeyPrefix         = "sp:proxies"
 	deadProxiesKeyPrefix     = "sp:proxies:dead"
+	deadProxyKeyPrefix       = "sp:proxy_dead:"
 	sourceLastFetchKeyPrefix = "sp:source_last_fetch:"
 	authKeyPrefix            = "sp:auth:"
 	proxyMetaKeyPrefix       = "sp:proxy:"
@@ -26,10 +29,11 @@ type ProxyStat struct {
 }
 
 type RedisStore struct {
-	client *redis.Client
+	client       *redis.Client
+	deadProxyTTL time.Duration
 }
 
-func NewRedisStore(addr, password string, db int) (*RedisStore, error) {
+func NewRedisStore(addr, password string, db int, deadProxyTTL time.Duration) (*RedisStore, error) {
 	client := redis.NewClient(&redis.Options{
 		Addr:     addr,
 		Password: password,
@@ -40,7 +44,11 @@ func NewRedisStore(addr, password string, db int) (*RedisStore, error) {
 		return nil, fmt.Errorf("ping redis failed: %w", err)
 	}
 
-	return &RedisStore{client: client}, nil
+	if deadProxyTTL <= 0 {
+		deadProxyTTL = 24 * time.Hour
+	}
+
+	return &RedisStore{client: client, deadProxyTTL: deadProxyTTL}, nil
 }
 
 func (store *RedisStore) Close() error {
@@ -55,7 +63,8 @@ func (store *RedisStore) AddProxies(ctx context.Context, proxies []string) error
 	type seenCheck struct {
 		proxyAddr string
 		inLive    *redis.BoolCmd
-		inDead    *redis.BoolCmd
+		inDeadTTL *redis.IntCmd
+		inDeadSet *redis.BoolCmd
 	}
 
 	checks := make([]seenCheck, 0, len(proxies))
@@ -64,7 +73,8 @@ func (store *RedisStore) AddProxies(ctx context.Context, proxies []string) error
 		checks = append(checks, seenCheck{
 			proxyAddr: proxyAddr,
 			inLive:    readPipe.SIsMember(ctx, proxiesKeyPrefix, proxyAddr),
-			inDead:    readPipe.SIsMember(ctx, deadProxiesKeyPrefix, proxyAddr),
+			inDeadTTL: readPipe.Exists(ctx, deadProxyKey(proxyAddr)),
+			inDeadSet: readPipe.SIsMember(ctx, deadProxiesKeyPrefix, proxyAddr),
 		})
 	}
 
@@ -74,7 +84,7 @@ func (store *RedisStore) AddProxies(ctx context.Context, proxies []string) error
 
 	pipe := store.client.TxPipeline()
 	for _, item := range checks {
-		if item.inLive.Val() || item.inDead.Val() {
+		if item.inLive.Val() || item.inDeadTTL.Val() > 0 || item.inDeadSet.Val() {
 			continue
 		}
 
@@ -309,6 +319,7 @@ func (store *RedisStore) UnassignAuthHashFromProxyIfMatch(ctx context.Context, a
 
 func (store *RedisStore) MarkProxySuccess(ctx context.Context, proxyAddr string) error {
 	pipe := store.client.TxPipeline()
+	pipe.Del(ctx, deadProxyKey(proxyAddr))
 	pipe.SRem(ctx, deadProxiesKeyPrefix, proxyAddr)
 	pipe.HSet(ctx, proxyMetaKey(proxyAddr), "alive", 1)
 	pipe.HSet(ctx, proxyMetaKey(proxyAddr), "fail_count", 0)
@@ -323,7 +334,7 @@ func (store *RedisStore) IncrementProxyFailure(ctx context.Context, proxyAddr st
 	pipe := store.client.TxPipeline()
 	failCountCmd := pipe.HIncrBy(ctx, proxyMetaKey(proxyAddr), "fail_count", 1)
 	pipe.HSet(ctx, proxyMetaKey(proxyAddr), "alive", 0)
-	pipe.SAdd(ctx, deadProxiesKeyPrefix, proxyAddr)
+	// NOTE: Do not add to legacy dead set here; only permanently removed proxies get a TTL dead marker.
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return 0, fmt.Errorf("increment proxy fail count failed: %w", err)
@@ -346,13 +357,37 @@ func (store *RedisStore) RemoveProxyCascade(ctx context.Context, proxyAddr strin
 	pipe.Del(ctx, proxyAuthSetKey(proxyAddr))
 	pipe.Del(ctx, proxyMetaKey(proxyAddr))
 	pipe.SRem(ctx, proxiesKeyPrefix, proxyAddr)
-	pipe.SAdd(ctx, deadProxiesKeyPrefix, proxyAddr)
+	pipe.Set(ctx, deadProxyKey(proxyAddr), "1", store.deadProxyTTL)
+	pipe.SRem(ctx, deadProxiesKeyPrefix, proxyAddr)
 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("remove proxy cascade failed: %w", err)
 	}
 
+	return nil
+}
+
+// MigrateLegacyDeadSetToTTL converts the legacy dead set (sp:proxies:dead) into TTL markers.
+// After migration, the legacy set key is deleted to avoid unbounded growth.
+func (store *RedisStore) MigrateLegacyDeadSetToTTL(ctx context.Context) error {
+	members, err := store.client.SMembers(ctx, deadProxiesKeyPrefix).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return fmt.Errorf("read legacy dead set failed: %w", err)
+	}
+	if len(members) == 0 {
+		return nil
+	}
+
+	pipe := store.client.TxPipeline()
+	for _, proxyAddr := range members {
+		pipe.Set(ctx, deadProxyKey(proxyAddr), "1", store.deadProxyTTL)
+	}
+	pipe.Del(ctx, deadProxiesKeyPrefix)
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("migrate legacy dead set failed: %w", err)
+	}
 	return nil
 }
 
@@ -370,4 +405,9 @@ func proxyMetaKey(proxyAddr string) string {
 
 func proxyAuthSetKey(proxyAddr string) string {
 	return proxyAuthSetKeyPrefix + proxyAddr
+}
+
+func deadProxyKey(proxyAddr string) string {
+	sum := sha256.Sum256([]byte(proxyAddr))
+	return deadProxyKeyPrefix + hex.EncodeToString(sum[:])
 }

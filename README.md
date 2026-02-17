@@ -1,15 +1,15 @@
 # Silicon-Proxy
 
-高性能、自动化的 API 代理工具，专为 AI 后端服务（如 SiliconFlow）设计，通过多源 SOCKS5 代理池实现高可用请求转发。
+高性能、自动化的 API 代理工具，通过多源 SOCKS5 代理池实现高可用请求转发，规避后端风控。
 
 ## 核心特性
 
-- **多源代理抓取**：支持从远程 URL（如 GitHub 地址）或本地文件自动定期同步 SOCKS5 代理列表。
-- **并发健康检查**：支持大规模并发检测代理存活性，自动维护存活池并剔除失效节点。
-- **智能 Sticky Routing**：基于 `Authorization` Header 将特定 API Key 绑定到固定代理，确保对话会话的连贯性。
-- **自动故障转移 & 重试**：当下层代理请求失败时，自动在毫秒级切换到另一个可用代理并重试，最高 3 次（可调）。
-- **Redis 持久化存储**：使用 Redis 存储代理状态、健康信息及 Key 绑定关系，支持容器重启及水平扩展。
-- **JSONC 配置格式**：支持带注释的 JSON 配置文件，配置层级清晰。
+- **多源代理抓取**：支持从远程URL或本地文件自动定期拉取 SOCKS5 代理列表。
+- **并发代理测活**：支持大规模并发检测代理存活性，自动维护代理池并剔除失效代理。
+- **死代理冷却机制**：被剔除的代理会存在一个集合里，默认24h后再删除，抓取代理时过滤掉。
+- **key与代理绑定**：在 `Authorization` Header 里的 API Key 会绑定到固定代理。
+- **自动故障转移 & 重试**：当代理请求失败时，自动在毫秒级切换到另一个可用代理并重试，默认最高 3 次（可调）。
+- **Redis**：存储代理状态及 Key 与代理绑定关系，支持容器重启及水平扩展。
 - **Docker 化部署**：提供完整的 Dockerfile 与 docker-compose 方案，开箱即用。
 
 ## 配置说明 (`config.jsonc`)
@@ -20,7 +20,8 @@
 | `backend` | 默认转发的目标后端域名 | `https://api.siliconflow.cn/` |
 | `max_auth_per_proxy` | 单个代理最大挂载的 Auth Key 数量 | `1` |
 | `max_request_retries` | 失败后自动切换代理的重试次数 | `3` |
-| `request_timeout` | 单次请求总超时时长 | `10s` |
+| `request_timeout` | 连接预算：从请求开始到成功连上后端（含重试、拨号、TLS 握手）的最大耗时；连上后不再用它中断流式响应 | `10s` |
+| `health_check.dead_proxy_ttl` | 被剔除的代理冷却期（到期后允许再次加入） | `24h` |
 | `sources` | 代理获取源配置（支持 URL/Local） | - |
 | `health_check` | 探活频率、超时及并发数 | - |
 | `pool` | HTTP 连接池配置 | - |
@@ -39,7 +40,7 @@ docker compose up -d
 
 ### 2. 本地直接运行
 
-确保本地已安装 Go 1.22+ 及 Redis 服务。
+确保本地已安装 Go 1.24+ 及 Redis 服务。
 
 ```bash
 # 编译
@@ -56,7 +57,7 @@ go build -o silicon-proxy ./cmd/silicon-proxy
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-xxxxx" \
   -H "Content-Type: application/json" \
-  -d '{"model":"deepseek-ai/DeepSeek-V3","messages":[{"role":"user","content":"Hi"}]}'
+  -d '{"model":"deepseek-ai/DeepSeek-V3.2","messages":[{"role":"user","content":"Hi"}]}'
 ```
 
 ## 项目架构
@@ -69,5 +70,5 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 - `internal/source`: 抽象化的代理数据源（URL、Local 文件）。
 - `internal/store`: Redis 数据存取层，负责分布式锁（TODO）及负载统计。
 
-## 已知问题
-- 对非流式支持不佳。因为无法判断是代理无响应还是AI正在回答。
+## 注意
+- 请在调整配置文件时充分考虑：代理测活是否会对后端造成cc攻击。
